@@ -751,10 +751,10 @@
       <div class="help-title">📊 How to collect troop stat inputs:</div>
       <div class="help-section">
         <ol>
-          <li>Call a rally on Terror with your strongest hero (used for Bear), full cap</li>
+          <li>Call a rally on Terror with your strongest heros (used for Bear), full cap</li>
           <li>Write down <strong>Infantry/Cavalry/Archers</strong> - Attack% and Lethality%</li>
-          <li>Click in-game Squad image > take your troop amounts</li>
-          <li>Click Squad > Formation > take rally size</li>
+          <li>Click in-game Player image > Squad > take your troop amounts</li>
+          <li>Click in-game Player image > Squad > Formation > take rally size</li>
           <li>Enter all numbers below
         </ol>
       </div>
@@ -853,7 +853,7 @@
           <div class="error-message" id="err_rallySize"></div>
         </div>
         <div class="input-wrapper">
-          <label>Join cap <span class="tooltip-icon" data-tooltip="Maximum troops per march you can join in your Alliance">?</span></label>
+          <label>Join cap <span class="tooltip-icon" data-tooltip="Maximum troops per join in your Alliance. No CAP? Set same as Call Rally size">?</span></label>
           <input id="marchSize" type="number" min="0" value="65000">
           <div class="error-message" id="err_marchSize"></div>
         </div>
@@ -880,7 +880,7 @@
           <strong>How it works:</strong>
           <ul>
             <li>Runs damage simulation on all possible ratios</li>
-            <li>Calculates best 10 combinations</li>
+            <li>Calculates and evaluates best 10 combinations</li>
             <li>Shows scoreboard sorted by total damage</li>
             <li>Recommends optimal march count</li>
             <li>Auto-fills your call rally &  join formations</li>
@@ -893,7 +893,7 @@
           <p>Uses your input Attack/Lethality stats to <strong>calculate optimal call formation</strong> and plots it on an interactive ternary chart for visual analysis.</p>
           <strong>💡 RECOMMENDATION:</strong>
           <ul>
-            <li>If you JOIN less then (<= 45-50x per BEAR, use), Option-A to maximize your CALL rally score with the best troop ratio, and fill JOIN rallies with your remaining troops for extra points!</li>
+            <li>If you JOIN less then (< 45-50x times per BEAR), use Option-A to maximize your CALL rally score with the best troop ratio, and fill JOIN rallies with your remaining troops for extra points!</li>
           </ul>
             <div class="help-section">
             <strong>How it works:</strong>
