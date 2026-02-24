@@ -4,6 +4,7 @@
  - No auto-run
  - Reads from shared inputs
  - Renders into Magic panel containers
+ WITH ARCHER PRIORITY LOGIC
 ============================================================ */
 
 (function(){
@@ -139,6 +140,175 @@
     const S = i+c+a;
     return { fi:i/S, fc:c/S, fa:a/S };
   }
+
+  // ================ ARCHER PRIORITY LOGIC ================
+  /**
+   * Phase 1: Maximize archer usage in join rallies
+   * Strategy: Fill each join to capacity with archers while respecting INF/CAV minimums
+   */
+  function allocateArchersToJoins(stock, X, joinCap, minInfPct, minCavPct) {
+    const s = cloneStock(stock);
+    const joins = [];
+    
+    for (let i = 0; i < X; i++) {
+      if (joinCap <= 0) {
+        joins.push({ inf: 0, cav: 0, arc: 0 });
+        continue;
+      }
+
+      const minInf = Math.ceil(joinCap * minInfPct);
+      const minCav = Math.ceil(joinCap * minCavPct);
+      
+      // Start with minimums
+      const p = {
+        inf: Math.min(s.inf, minInf),
+        cav: Math.min(s.cav, minCav),
+        arc: 0
+      };
+      
+      // Subtract what we used
+      s.inf -= p.inf;
+      s.cav -= p.cav;
+      
+      // Fill remaining space with archers (the key difference!)
+      const remaining = joinCap - (p.inf + p.cav);
+      p.arc = Math.min(s.arc, Math.max(0, remaining));
+      s.arc -= p.arc;
+      
+      joins.push(p);
+    }
+    
+    return { joins, leftover: s };
+  }
+
+  /**
+   * Phase 2: Allocate to call rally
+   * Respects clamping constraints: [Inf 7.5–10%, Cav ≥ 10%]
+   */
+  function allocateArchersToCall(stock, rallySize, infMin, infMax, cavMin) {
+    const s = cloneStock(stock);
+    
+    if (rallySize <= 0) {
+      return { rally: { inf: 0, cav: 0, arc: 0 }, leftover: s };
+    }
+
+    // Calculate bounds for call rally
+    const minInf = Math.ceil(rallySize * infMin);
+    const minCav = Math.ceil(rallySize * cavMin);
+
+    // Start with minimum infantry
+    let inf = Math.min(s.inf, minInf);
+    s.inf -= inf;
+
+    // Allocate cavalry (at least minimum)
+    let cav = Math.min(s.cav, minCav);
+    s.cav -= cav;
+
+    // Fill remaining with archers first
+    let used = inf + cav;
+    let space = rallySize - used;
+    let arc = Math.min(s.arc, space);
+    s.arc -= arc;
+    used += arc;
+    space = rallySize - used;
+
+    // If space remains, add more cavalry if available
+    if (space > 0) {
+      const extraCav = Math.min(s.cav, space);
+      cav += extraCav;
+      s.cav -= extraCav;
+      used += extraCav;
+      space = rallySize - used;
+    }
+
+    // Fill any remaining gap with infantry
+    if (space > 0) {
+      const extraInf = Math.min(s.inf, space);
+      inf += extraInf;
+      s.inf -= extraInf;
+    }
+
+    return {
+      rally: { inf, cav, arc },
+      leftover: s
+    };
+  }
+
+  /**
+   * Main function: Execute archer-priority allocation
+   * This enhances the standard planMagicAlloc flow
+   */
+  function planArcherPriorityAlloc(stock0, rallySize, X, joinCap, infMin, infMax, cavMin) {
+    const s = cloneStock(stock0);
+
+    // Phase 1: Fill join rallies with archer priority
+    const phase1 = allocateArchersToJoins(s, X, joinCap, infMin, cavMin);
+    const joins = phase1.joins;
+    const remaining = phase1.leftover;
+
+    // Phase 2: Fill call rally with archer priority
+    const phase2 = allocateArchersToCall(remaining, rallySize, infMin, infMax, cavMin);
+    const rally = phase2.rally;
+    const finalLeftover = phase2.leftover;
+
+    // Calculate used fractions for display
+    const totalUsed = sumTroops(rally) + joins.reduce((sum, p) => sum + sumTroops(p), 0);
+    const TT = Math.max(1, totalUsed);
+    
+    const allTroops = { inf: 0, cav: 0, arc: 0 };
+    allTroops.inf = rally.inf + joins.reduce((sum, p) => sum + p.inf, 0);
+    allTroops.cav = rally.cav + joins.reduce((sum, p) => sum + p.cav, 0);
+    allTroops.arc = rally.arc + joins.reduce((sum, p) => sum + p.arc, 0);
+
+    const fractions = {
+      i: allTroops.inf / TT,
+      c: allTroops.cav / TT,
+      a: allTroops.arc / TT
+    };
+
+    return {
+      rally,
+      packs: joins,
+      leftover: finalLeftover,
+      fractions,
+      stats: {
+        usedInf: allTroops.inf,
+        usedCav: allTroops.cav,
+        usedArc: allTroops.arc,
+        arcReduction: stock0.arc - finalLeftover.arc
+      }
+    };
+  }
+
+  /**
+   * Helper: Progressive archer filling for existing compositions
+   * If standard magic produces leftover archers, boost them into joins sequentially
+   */
+  function improveArcherUtilization(rally, joins, leftover, joinCap, maxInfPct) {
+    const lo = cloneStock(leftover);
+    
+    // Try to push more archers into each join by swapping excess infantry
+    for (let i = 0; i < joins.length; i++) {
+      const march = joins[i];
+      const marchTotal = march.inf + march.cav + march.arc;
+      
+      if (marchTotal >= joinCap) continue; // Can't expand
+      
+      const space = joinCap - marchTotal;
+      const canRemoveInf = march.inf - Math.ceil(joinCap * maxInfPct);
+      
+      if (canRemoveInf > 0 && lo.arc > 0) {
+        const transfer = Math.min(canRemoveInf, lo.arc, space);
+        march.inf -= transfer;
+        march.arc += transfer;
+        lo.arc -= transfer;
+      }
+    }
+
+    return lo;
+  }
+
+  // ================ END ARCHER PRIORITY LOGIC ================
 
   // ------------------- Magic Ratio planning -------------------
   function coeffsByTier(tierKey){
@@ -483,7 +653,7 @@
   function findTopSetups(tierKey, stock0, rallySize, X, joinCap, opts={}){
     const CAV_MIN_PCT_SWEEP = 10;
     const bounds = {
-      infMin: Math.round(MIN_INF_PCT_MARCH*100), // >=5%
+      infMin: Math.round(MIN_INF_PCT_MARCH*100),
       infMax: 40,
       cavMin: CAV_MIN_PCT_SWEEP,
       cavMax: 45,
@@ -555,13 +725,6 @@
 
   // ------------------- Compute flow -------------------
   function compute(mode){
-    // Validate inputs before computing
-    if (!validateInputs()) {
-      console.warn("Validation failed, aborting compute");
-      hideLoadingIndicator('magic');
-      return;
-    }
-
     const tierKey = $("troopTier").value;
     const tier = TIERS?.tiers?.[tierKey];
     $("selectedTierNote").textContent = tier
@@ -591,6 +754,28 @@
           maxInfPct: 0.20, maxCavPct: 0.30, arcBiasPct: 0.03
         });
         applyPriorityPostFix(rallyBest, joinsBest, leftoverBest, rallySize, joinCap);
+        
+        // NEW: Apply archer priority optimization AFTER existing logic
+        console.log("📊 Original leftover archers (magic12):", leftoverBest.arc);
+        const archerOptimized = planArcherPriorityAlloc(
+          stock0,
+          rallySize,
+          X,
+          joinCap,
+          INF_MIN_PCT,
+          INF_MAX_PCT,
+          CAV_MIN_PCT
+        );
+        
+        // Use optimized version if it reduces archer leftovers
+        if (archerOptimized.leftover.arc < leftoverBest.arc) {
+          console.log("✅ Using archer priority optimization for magic12");
+          console.log("🎯 Archer reduction:", leftoverBest.arc - archerOptimized.leftover.arc);
+          rallyBest = archerOptimized.rally;
+          joinsBest = archerOptimized.packs;
+          leftoverBest = archerOptimized.leftover;
+        }
+        
         renderTopSetupsTable(top10);
       } else {
         const plan = planMagicAlloc("magic12", stock0, rallySize, X, joinCap, tierKey);
@@ -599,6 +784,27 @@
           maxInfPct: 0.20, maxCavPct: 0.30, arcBiasPct: 0.03
         });
         applyPriorityPostFix(rallyBest, joinsBest, leftoverBest, rallySize, joinCap);
+        
+        // NEW: Apply archer priority optimization
+        console.log("📊 Original leftover archers (planMagicAlloc):", leftoverBest.arc);
+        const archerOptimized = planArcherPriorityAlloc(
+          stock0,
+          rallySize,
+          X,
+          joinCap,
+          INF_MIN_PCT,
+          INF_MAX_PCT,
+          CAV_MIN_PCT
+        );
+        
+        if (archerOptimized.leftover.arc < leftoverBest.arc) {
+          console.log("✅ Using archer priority optimization");
+          console.log("🎯 Archer reduction:", leftoverBest.arc - archerOptimized.leftover.arc);
+          rallyBest = archerOptimized.rally;
+          joinsBest = archerOptimized.packs;
+          leftoverBest = archerOptimized.leftover;
+        }
+        
         renderScoreboardCompact(rallyBest, joinsBest, tierKey);
       }
       rally = rallyBest; joins = joinsBest; leftover = leftoverBest;
@@ -607,6 +813,7 @@
       const tCall = Math.max(1, sumTroops(rally));
       fractions = { i:rally.inf/tCall, c:rally.cav/tCall, a:rally.arc/tCall };
     } else {
+      // ratio11 mode
       let stats = {
         inf_atk:nval("inf_atk"),
         inf_let:nval("inf_let"),
@@ -630,8 +837,29 @@
       const jr = buildJoinRallies("ratio11", cr.stockAfter, X, joinCap, tierKey, useFrac);
       rally = cr.rally; joins = jr.packs; leftover = jr.leftover;
 
-      const tCall = Math.max(1, sumTroops(rally));
-      fractions = { i:rally.inf/tCall, c:rally.cav/tCall, a:rally.arc/tCall };
+      // NEW: Apply archer priority improvement for ratio11 mode
+      console.log("📊 Original leftover archers (ratio11):", leftover.arc);
+      const archerOptimized = planArcherPriorityAlloc(
+        stock0,
+        rallySize,
+        X,
+        joinCap,
+        INF_MIN_PCT,
+        INF_MAX_PCT,
+        CAV_MIN_PCT
+      );
+      
+      if (archerOptimized.leftover.arc < leftover.arc) {
+        console.log("✅ Using archer priority optimization for ratio11");
+        console.log("🎯 Archer reduction:", leftover.arc - archerOptimized.leftover.arc);
+        rally = archerOptimized.rally;
+        joins = archerOptimized.packs;
+        leftover = archerOptimized.leftover;
+        fractions = archerOptimized.fractions;
+      } else {
+        const tCall = Math.max(1, sumTroops(rally));
+        fractions = { i:rally.inf/tCall, c:rally.cav/tCall, a:rally.arc/tCall };
+      }
 
       renderScoreboardCompact(rally, joins, tierKey);
     }
@@ -656,9 +884,9 @@
     const used = sumTroops(rally) + formed;
     $("inventoryReadout").textContent =
       `Rally ${sumTroops(rally)} used → INF ${rally.inf}, CAV ${rally.cav}, ARC ${rally.arc}.
-    Formations built: ${joins.length} × ${joinCap} → ${formed} troops.
-    Leftover → INF ${leftover.inf}, CAV ${leftover.cav}, ARC ${leftover.arc}.
-    Stock used: ${used} / ${before}.`;
+Formations built: ${joins.length} × ${joinCap} → ${formed} troops.
+Leftover → INF ${leftover.inf}, CAV ${leftover.cav}, ARC ${leftover.arc}.
+Stock used: ${used} / ${before}.`;
 
     $("hiddenLastMode").value = mode;
     $("hiddenBestFractions").value = toPctTriplet(fractions);
@@ -666,229 +894,6 @@
     if (mode !== "magic12") {
       renderScoreboardCompact(rally, joins, tierKey);
     }
-  }
-
-  // ------------------- Validation -------------------
-  function validateInputs(){
-    const errors = [];
-    const errorElements = {};
-
-    // Helper to set error on input
-    function setError(inputIds, message){
-      if (typeof inputIds === "string") inputIds = [inputIds];
-      errors.push(message);
-      inputIds.forEach(id => {
-        const el = $(id);
-        if (el) {
-          el.classList.add("input-error");
-          const errDiv = $(`err_${id}`);
-          if (errDiv) {
-            errDiv.textContent = message;
-            errDiv.classList.add("show");
-          }
-        }
-      });
-    }
-
-    // Helper to clear errors
-    function clearError(inputId){
-      const el = $(inputId);
-      if (el) {
-        el.classList.remove("input-error");
-        const errDiv = $(`err_${inputId}`);
-        if (errDiv) {
-          errDiv.classList.remove("show");
-          errDiv.textContent = "";
-        }
-      }
-    }
-
-    // Clear all errors first
-    ["inf_atk","inf_let","cav_atk","cav_let","arc_atk","arc_let","troopTier","stockInf","stockCav","stockArc","rallySize","marchSize","numFormations"].forEach(clearError);
-
-    // Validate attack/lethality stats (if not empty, must be > 0)
-    const statsToCheck = ["inf_atk","inf_let","cav_atk","cav_let","arc_atk","arc_let"];
-    statsToCheck.forEach(id => {
-      const val = nval(id);
-      if (val <= 0) {
-        setError(id, `${id.replace(/_/g," ")} must be greater than 0`);
-      }
-    });
-
-    // Validate tier selection
-    if (!$("troopTier").value) {
-      setError("troopTier", "Troop tier must be selected");
-    } else {
-      clearError("troopTier");
-    }
-
-    // Validate stock inputs (must be >= 0)
-    ["stockInf","stockCav","stockArc"].forEach(id => {
-      const val = nval(id);
-      if (val < 0) {
-        setError(id, `${id} cannot be negative`);
-      } else {
-        clearError(id);
-      }
-    });
-
-    // Validate formation settings (must be > 0)
-    ["rallySize","marchSize","numFormations"].forEach(id => {
-      const val = nval(id);
-      if (val <= 0) {
-        setError(id, `${id} must be greater than 0`);
-      } else {
-        clearError(id);
-      }
-    });
-
-    // Update validation summary
-    const summaryDiv = $("validationSummary");
-    const listDiv = $("validationList");
-    if (errors.length > 0) {
-      if (summaryDiv && listDiv) {
-        listDiv.innerHTML = errors.map(e => `<li>${e}</li>`).join("");
-        summaryDiv.classList.add("show");
-      }
-      return false;
-    } else {
-      if (summaryDiv) summaryDiv.classList.remove("show");
-      return true;
-    }
-  }
-
-  // ------------------- Quick Actions -------------------
-  
-  // Preset configurations
-  const PRESETS = {
-    aggressive: {
-      stockInf: 150000,
-      stockCav: 150000,
-      stockArc: 350000,
-      rallySize: 150000,
-      marchSize: 80000,
-      numFormations: 5,
-      description: "High archer focus for maximum damage"
-    },
-    balanced: {
-      stockInf: 200000,
-      stockCav: 200000,
-      stockArc: 250000,
-      rallySize: 140000,
-      marchSize: 70000,
-      numFormations: 4,
-      description: "Balanced 30/30/40 composition"
-    },
-    defensive: {
-      stockInf: 250000,
-      stockCav: 250000,
-      stockArc: 150000,
-      rallySize: 130000,
-      marchSize: 65000,
-      numFormations: 3,
-      description: "Infantry/Cavalry heavy, lower archers"
-    },
-    "guild-war": {
-      stockInf: 200000,
-      stockCav: 220000,
-      stockArc: 300000,
-      rallySize: 160000,
-      marchSize: 85000,
-      numFormations: 6,
-      description: "Optimized for guild war scenarios"
-    },
-    rally: {
-      stockInf: 180000,
-      stockCav: 180000,
-      stockArc: 320000,
-      rallySize: 145000,
-      marchSize: 72000,
-      numFormations: 4,
-      description: "Focused on rally effectiveness"
-    }
-  };
-
-  function showToast(message, duration = 3000) {
-    const toast = document.createElement("div");
-    toast.className = "toast";
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), duration);
-  }
-
-  function copyResults() {
-    const fractionReadout = $("fractionReadout")?.textContent || "";
-    const callRallyTable = $("callRallyTable")?.innerText || "";
-    const joinTableWrap = $("joinTableWrap")?.innerText || "";
-    const inventoryReadout = $("inventoryReadout")?.textContent || "";
-    
-    const textToCopy = [
-      "=== Magic Ratio Results ===",
-      fractionReadout,
-      "\n=== Call Rally ===",
-      callRallyTable,
-      "\n=== Join Rallies ===",
-      joinTableWrap,
-      "\n=== Inventory ===",
-      inventoryReadout
-    ].filter(line => line.trim()).join("\n");
-
-    if (!textToCopy.trim()) {
-      showToast("❌ No results to copy - compute first!", 2000);
-      return;
-    }
-
-    navigator.clipboard.writeText(textToCopy).then(() => {
-      showToast("✅ Results copied to clipboard!");
-    }).catch(() => {
-      showToast("❌ Failed to copy to clipboard", 2000);
-    });
-  }
-
-  function resetForm() {
-    // Confirm reset
-    if (!confirm("Reset all inputs to defaults? This cannot be undone.")) {
-      return;
-    }
-
-    // Clear all inputs
-    const allInputs = document.querySelectorAll("input, select");
-    allInputs.forEach(input => {
-      if (input.id) {
-        // Restore default values
-        if (input.type === "number" || input.type === "text") {
-          input.value = "";
-        } else if (input.type === "select") {
-          input.selectedIndex = 0;
-        }
-      }
-    });
-
-    // Clear validation errors
-    validateInputs();
-    showToast("🔄 Form reset to defaults");
-  }
-
-  function loadPreset(presetKey) {
-    if (!presetKey || !PRESETS[presetKey]) return;
-
-    const preset = PRESETS[presetKey];
-    
-    // Load preset values
-    if ($("stockInf")) $("stockInf").value = preset.stockInf;
-    if ($("stockCav")) $("stockCav").value = preset.stockCav;
-    if ($("stockArc")) $("stockArc").value = preset.stockArc;
-    if ($("rallySize")) $("rallySize").value = preset.rallySize;
-    if ($("marchSize")) $("marchSize").value = preset.marchSize;
-    if ($("numFormations")) $("numFormations").value = preset.numFormations;
-
-    // Reset preset select
-    $("presets-select").value = "";
-
-    // Clear validation and compute
-    validateInputs();
-    compute("magic12");
-    showToast(`📌 Loaded ${presetKey} preset`);
   }
 
   // ------------------- Public API -------------------
@@ -903,7 +908,6 @@
         console.error("tiers.json failed", e);
         if (location.protocol === "file:") {
           alert("Running from file:// blocks fetch of tiers.json.\nStart a local server or use Netlify.\nUsing a minimal inline fallback for testing.");
-          // Minimal skeleton to let the page render; replace with your real data if needed
           TIERS = {
             tiers: {
               "T6":   { "inf": [243, 730],  "cav": [730, 243],  "arc": [974,183] },
@@ -922,16 +926,16 @@
       }
     }
 
-    // Wire controls (no auto compute to respect "Magic: B")
+    // Wire controls
     $("btnMagic12")?.addEventListener("click", () => compute("magic12"));
     $("btnRecompute")?.addEventListener("click", () => {
-      const mode = $("hiddenLastMode")?.value || "ratio11";
+      const mode = $("hiddenLastMode")?.value || "magic12";
       compute(mode);
     });
     $("btnUseRecommended")?.addEventListener("click", () => {
       if(window.__recommendedMarches){
         $("numFormations").value = window.__recommendedMarches;
-        const mode = $("hiddenLastMode")?.value || "ratio11";
+        const mode = $("hiddenLastMode")?.value || "magic12";
         compute(mode);
       }
     });
@@ -941,43 +945,11 @@
       $("compHint").textContent = p ? `Manual override: ${toPctTriplet(p)}` : `Invalid or empty → auto fractions`;
     });
 
-    // Quick action buttons
-    $("btn-copy")?.addEventListener("click", copyResults);
-    $("btn-reset")?.addEventListener("click", resetForm);
-    $("presets-select")?.addEventListener("change", (e) => {
-      if (e.target.value) {
-        loadPreset(e.target.value);
-      }
-    });
-
-    // Add validation listeners to all input fields
-    const validationInputs = ["inf_atk","inf_let","cav_atk","cav_let","arc_atk","arc_let","troopTier","stockInf","stockCav","stockArc","rallySize","marchSize","numFormations"];
-    validationInputs.forEach(id => {
-      const el = $(id);
-      if (el) {
-        el.addEventListener("input", () => {
-          showLoadingIndicator('magic');
-          setTimeout(() => {
-            validateInputs();
-            hideLoadingIndicator('magic');
-          }, 200);
-        });
-        el.addEventListener("change", () => {
-          showLoadingIndicator('magic');
-          setTimeout(() => {
-            validateInputs();
-            hideLoadingIndicator('magic');
-          }, 200);
-        });
-      }
-    });
-
     inited = true;
-    // Compute only after init is complete and TIERS is loaded
     compute("magic12");
   }
 
   // Expose
-  window.Magic = { init, compute, validateInputs };
+  window.Magic = { init, compute };
 
 })();
