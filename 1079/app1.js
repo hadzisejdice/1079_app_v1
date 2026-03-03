@@ -142,10 +142,6 @@
   }
 
   // ================ ARCHER PRIORITY LOGIC ================
-  /**
-   * Phase 1: Maximize archer usage in join rallies
-   * Strategy: Fill each join to capacity with archers while respecting INF/CAV minimums
-   */
   function allocateArchersToJoins(stock, X, joinCap, minInfPct, minCavPct) {
     const s = cloneStock(stock);
     const joins = [];
@@ -159,18 +155,15 @@
       const minInf = Math.ceil(joinCap * minInfPct);
       const minCav = Math.ceil(joinCap * minCavPct);
       
-      // Start with minimums
       const p = {
         inf: Math.min(s.inf, minInf),
         cav: Math.min(s.cav, minCav),
         arc: 0
       };
       
-      // Subtract what we used
       s.inf -= p.inf;
       s.cav -= p.cav;
       
-      // Fill remaining space with archers (the key difference!)
       const remaining = joinCap - (p.inf + p.cav);
       p.arc = Math.min(s.arc, Math.max(0, remaining));
       s.arc -= p.arc;
@@ -181,10 +174,6 @@
     return { joins, leftover: s };
   }
 
-  /**
-   * Phase 2: Allocate to call rally
-   * Respects clamping constraints: [Inf 7.5–10%, Cav ≥ 10%]
-   */
   function allocateArchersToCall(stock, rallySize, infMin, infMax, cavMin) {
     const s = cloneStock(stock);
     
@@ -192,19 +181,15 @@
       return { rally: { inf: 0, cav: 0, arc: 0 }, leftover: s };
     }
 
-    // Calculate bounds for call rally
     const minInf = Math.ceil(rallySize * infMin);
     const minCav = Math.ceil(rallySize * cavMin);
 
-    // Start with minimum infantry
     let inf = Math.min(s.inf, minInf);
     s.inf -= inf;
 
-    // Allocate cavalry (at least minimum)
     let cav = Math.min(s.cav, minCav);
     s.cav -= cav;
 
-    // Fill remaining with archers first
     let used = inf + cav;
     let space = rallySize - used;
     let arc = Math.min(s.arc, space);
@@ -212,7 +197,6 @@
     used += arc;
     space = rallySize - used;
 
-    // If space remains, add more cavalry if available
     if (space > 0) {
       const extraCav = Math.min(s.cav, space);
       cav += extraCav;
@@ -221,7 +205,6 @@
       space = rallySize - used;
     }
 
-    // Fill any remaining gap with infantry
     if (space > 0) {
       const extraInf = Math.min(s.inf, space);
       inf += extraInf;
@@ -234,24 +217,17 @@
     };
   }
 
-  /**
-   * Main function: Execute archer-priority allocation
-   * This enhances the standard planMagicAlloc flow
-   */
   function planArcherPriorityAlloc(stock0, rallySize, X, joinCap, infMin, infMax, cavMin) {
     const s = cloneStock(stock0);
 
-    // Phase 1: Fill join rallies with archer priority
     const phase1 = allocateArchersToJoins(s, X, joinCap, infMin, cavMin);
     const joins = phase1.joins;
     const remaining = phase1.leftover;
 
-    // Phase 2: Fill call rally with archer priority
     const phase2 = allocateArchersToCall(remaining, rallySize, infMin, infMax, cavMin);
     const rally = phase2.rally;
     const finalLeftover = phase2.leftover;
 
-    // Calculate used fractions for display
     const totalUsed = sumTroops(rally) + joins.reduce((sum, p) => sum + sumTroops(p), 0);
     const TT = Math.max(1, totalUsed);
     
@@ -280,19 +256,14 @@
     };
   }
 
-  /**
-   * Helper: Progressive archer filling for existing compositions
-   * If standard magic produces leftover archers, boost them into joins sequentially
-   */
   function improveArcherUtilization(rally, joins, leftover, joinCap, maxInfPct) {
     const lo = cloneStock(leftover);
     
-    // Try to push more archers into each join by swapping excess infantry
     for (let i = 0; i < joins.length; i++) {
       const march = joins[i];
       const marchTotal = march.inf + march.cav + march.arc;
       
-      if (marchTotal >= joinCap) continue; // Can't expand
+      if (marchTotal >= joinCap) continue;
       
       const space = joinCap - marchTotal;
       const canRemoveInf = march.inf - Math.ceil(joinCap * maxInfPct);
@@ -307,7 +278,6 @@
 
     return lo;
   }
-
   // ================ END ARCHER PRIORITY LOGIC ================
 
   // ------------------- Magic Ratio planning -------------------
@@ -510,6 +480,74 @@
     $("scoreboardTableWrap").innerHTML = out;
   }
 
+  // -------------------------------------------------------
+  // FIX: renderFinalScoreboard
+  // Called AFTER all adjustments are applied to rally+joins.
+  // Re-runs the score engine on the TRUE final formations,
+  // shows correct inf/cav/arc % for CALL and JOIN,
+  // and shows the correct total final score.
+  // -------------------------------------------------------
+  function renderFinalScoreboard(rally, joins, tierKey) {
+    // Re-score using the FINAL adjusted formations
+    const callDmg  = computeFormationDamage(rally, tierKey);
+    const callScore = callDmg.finalScore;
+
+    let joinScore = 0;
+    for (const p of joins) {
+      joinScore += computeFormationDamage(p, tierKey).finalScore;
+    }
+    const totalScore = callScore + joinScore;
+
+    // Compute real ratios from actual troop counts
+    const callTotal = Math.max(1, sumTroops(rally));
+    const callFrac = {
+      i: rally.inf / callTotal,
+      c: rally.cav / callTotal,
+      a: rally.arc / callTotal
+    };
+
+    let jInf = 0, jCav = 0, jArc = 0;
+    for (const p of joins) { jInf += p.inf; jCav += p.cav; jArc += p.arc; }
+    const joinTotal = Math.max(1, jInf + jCav + jArc);
+    const joinFrac = {
+      i: jInf / joinTotal,
+      c: jCav / joinTotal,
+      a: jArc / joinTotal
+    };
+
+    const callTrip = toPctTriplet(callFrac);
+    const joinTrip = toPctTriplet(joinFrac);
+
+    let html = `
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>CALL formation</th>
+            <th>CALL score</th>
+            <th>JOIN formation</th>
+            <th>JOIN score</th>
+            <th>Total score</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    // Show the single final result (marked as "Final" / rank 1)
+    html += `
+      <tr>
+        <td>✅ Final</td>
+        <td>${callTrip}</td>
+        <td>${callScore.toLocaleString()}</td>
+        <td>${joinTrip}</td>
+        <td>${joinScore.toLocaleString()}</td>
+        <td><strong>${totalScore.toLocaleString()}</strong></td>
+      </tr>
+    `;
+    html += `</tbody></table>`;
+
+    $("scoreboardTableWrap").innerHTML = html;
+  }
+
   // Hybrid Post-fix (unchanged)
   function ensureMinInf(march, minInf, stockLeftover){
     if (march.inf >= minInf) return;
@@ -669,38 +707,6 @@
     results.sort((a,b) => b.totalScore - a.totalScore);
     return results.slice(0, 10);
   }
-  function renderTopSetupsTable(rows){
-    let html = `
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Call formation</th>
-            <th>Call score</th>
-            <th>Join formation</th>
-            <th>Join score</th>
-            <th>Total score</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-    rows.forEach((r, idx) => {
-      const callTrip = toPctTriplet(r.usedCallFrac);
-      const joinTrip = toPctTriplet(r.usedJoinFrac);
-      html += `
-        <tr>
-          <td>${idx+1}</td>
-          <td>${callTrip}</td>
-          <td>${r.callScore.toLocaleString()}</td>
-          <td>${joinTrip}</td>
-          <td>${r.joinScore.toLocaleString()}</td>
-          <td><strong>${r.totalScore.toLocaleString()}</strong></td>
-        </tr>
-      `;
-    });
-    html += `</tbody></table>`;
-    $("scoreboardTableWrap").innerHTML = html;
-  }
 
   // 1:1 simple builder
   function buildCallRally(mode, stock, rallySize, tierKey, manual){
@@ -754,20 +760,13 @@
           maxInfPct: 0.20, maxCavPct: 0.30, arcBiasPct: 0.03
         });
         applyPriorityPostFix(rallyBest, joinsBest, leftoverBest, rallySize, joinCap);
-        
-        // NEW: Apply archer priority optimization AFTER existing logic
+
+        // Apply archer priority optimization AFTER existing logic
         console.log("📊 Original leftover archers (magic12):", leftoverBest.arc);
         const archerOptimized = planArcherPriorityAlloc(
-          stock0,
-          rallySize,
-          X,
-          joinCap,
-          INF_MIN_PCT,
-          INF_MAX_PCT,
-          CAV_MIN_PCT
+          stock0, rallySize, X, joinCap, INF_MIN_PCT, INF_MAX_PCT, CAV_MIN_PCT
         );
-        
-        // Use optimized version if it reduces archer leftovers
+
         if (archerOptimized.leftover.arc < leftoverBest.arc) {
           console.log("✅ Using archer priority optimization for magic12");
           console.log("🎯 Archer reduction:", leftoverBest.arc - archerOptimized.leftover.arc);
@@ -775,8 +774,10 @@
           joinsBest = archerOptimized.packs;
           leftoverBest = archerOptimized.leftover;
         }
-        
-        renderTopSetupsTable(top10);
+
+        // FIX: Render scoreboard AFTER all adjustments, using final formations
+        renderFinalScoreboard(rallyBest, joinsBest, tierKey);
+
       } else {
         const plan = planMagicAlloc("magic12", stock0, rallySize, X, joinCap, tierKey);
         rallyBest = plan.rally; joinsBest = plan.packs; leftoverBest = plan.leftover;
@@ -784,19 +785,13 @@
           maxInfPct: 0.20, maxCavPct: 0.30, arcBiasPct: 0.03
         });
         applyPriorityPostFix(rallyBest, joinsBest, leftoverBest, rallySize, joinCap);
-        
-        // NEW: Apply archer priority optimization
+
+        // Apply archer priority optimization
         console.log("📊 Original leftover archers (planMagicAlloc):", leftoverBest.arc);
         const archerOptimized = planArcherPriorityAlloc(
-          stock0,
-          rallySize,
-          X,
-          joinCap,
-          INF_MIN_PCT,
-          INF_MAX_PCT,
-          CAV_MIN_PCT
+          stock0, rallySize, X, joinCap, INF_MIN_PCT, INF_MAX_PCT, CAV_MIN_PCT
         );
-        
+
         if (archerOptimized.leftover.arc < leftoverBest.arc) {
           console.log("✅ Using archer priority optimization");
           console.log("🎯 Archer reduction:", leftoverBest.arc - archerOptimized.leftover.arc);
@@ -804,14 +799,16 @@
           joinsBest = archerOptimized.packs;
           leftoverBest = archerOptimized.leftover;
         }
-        
-        renderScoreboardCompact(rallyBest, joinsBest, tierKey);
+
+        // FIX: Render scoreboard AFTER all adjustments, using final formations
+        renderFinalScoreboard(rallyBest, joinsBest, tierKey);
       }
       rally = rallyBest; joins = joinsBest; leftover = leftoverBest;
 
       // Call-only fractions for readout
       const tCall = Math.max(1, sumTroops(rally));
       fractions = { i:rally.inf/tCall, c:rally.cav/tCall, a:rally.arc/tCall };
+
     } else {
       // ratio11 mode
       let stats = {
@@ -837,18 +834,12 @@
       const jr = buildJoinRallies("ratio11", cr.stockAfter, X, joinCap, tierKey, useFrac);
       rally = cr.rally; joins = jr.packs; leftover = jr.leftover;
 
-      // NEW: Apply archer priority improvement for ratio11 mode
+      // Apply archer priority improvement for ratio11 mode
       console.log("📊 Original leftover archers (ratio11):", leftover.arc);
       const archerOptimized = planArcherPriorityAlloc(
-        stock0,
-        rallySize,
-        X,
-        joinCap,
-        INF_MIN_PCT,
-        INF_MAX_PCT,
-        CAV_MIN_PCT
+        stock0, rallySize, X, joinCap, INF_MIN_PCT, INF_MAX_PCT, CAV_MIN_PCT
       );
-      
+
       if (archerOptimized.leftover.arc < leftover.arc) {
         console.log("✅ Using archer priority optimization for ratio11");
         console.log("🎯 Archer reduction:", leftover.arc - archerOptimized.leftover.arc);
@@ -861,7 +852,8 @@
         fractions = { i:rally.inf/tCall, c:rally.cav/tCall, a:rally.arc/tCall };
       }
 
-      renderScoreboardCompact(rally, joins, tierKey);
+      // FIX: Render scoreboard AFTER all adjustments for ratio11 too
+      renderFinalScoreboard(rally, joins, tierKey);
     }
 
     // Recommendation
@@ -891,9 +883,8 @@ Stock used: ${used} / ${before}.`;
     $("hiddenLastMode").value = mode;
     $("hiddenBestFractions").value = toPctTriplet(fractions);
 
-    if (mode !== "magic12") {
-      renderScoreboardCompact(rally, joins, tierKey);
-    }
+    // NOTE: renderFinalScoreboard is now always called above inside the mode branches,
+    // so we do NOT call renderScoreboardCompact here anymore for any mode.
   }
 
   // ------------------- Public API -------------------
