@@ -396,6 +396,14 @@
     recommendedEl.textContent = `Best: ${newValue} marches (min fill ${(best.minFill*100).toFixed(1)}%)`;
     window.__recommendedMarches = newValue;
   }
+  
+  // Pulse only when recommended value changed
+  const btn = document.getElementById("btnUseRecommended");
+  if (btn && oldValue !== undefined && oldValue !== newValue) {
+      btn.classList.remove("pulse-recommended");      // reset if active
+      void btn.offsetWidth;                           // force reflow to restart animation
+      btn.classList.add("pulse-recommended");
+  }
 
   // ---------- Optimizer handler ----------
   function onOptimize() {
