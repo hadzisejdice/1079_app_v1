@@ -1,0 +1,64 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, feature/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate HTML
+        run: |
+          # Check that critical files exist
+          test -f index.html
+          test -f css/style.css
+          test -f js/ui.js
+          test -f js/magic.js
+          test -f js/optiona.js
+          test -f js/app.js
+          test -f tiers.json
+          echo "✅ All critical files present"
+
+      - name: Check file sizes
+        run: |
+          echo "📊 File sizes:"
+          find . -name "*.html" -o -name "*.css" -o -name "*.js" -o -name "*.json" | head -20 | xargs ls -lh
+          echo "✅ Size check complete"
+
+      - name: Validate JSON
+        run: |
+          python3 -c "import json; json.load(open('tiers.json')); print('✅ tiers.json valid')"
+
+      - name: Validate HTML structure
+        run: |
+          for f in index.html disclaimer.html privacy.html; do
+            if grep -q '<!DOCTYPE html>' "$f"; then
+              echo "✅ $f has valid DOCTYPE"
+            else
+              echo "❌ $f missing DOCTYPE"
+              exit 1
+            fi
+          done
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Netlify
+        uses: nwtgck/actions-netlify@v3
+        with:
+          publish-dir: '.'
+          production-branch: main
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          deploy-message: "Deploy from GitHub Actions"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
